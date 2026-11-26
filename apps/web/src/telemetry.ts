@@ -26,3 +26,7 @@ export function formatTemperature(celsius: number | null | undefined, unit: Unit
   const value = unit === 'F' ? celsius * 9 / 5 + 32 : celsius
   return `${value.toFixed(1)}°${unit}`
 }
+
+export function probeLabel(probeId: string, probeNames?: Record<string, string>): string {
+  return probeNames?.[probeId] || probeId
+}

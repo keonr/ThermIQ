@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { formatTemperature, type Reading, type Snapshot, type Unit } from './telemetry.ts'
 import { recordSnapshot } from './history.ts'
 import BluetoothScan from './BluetoothScan.tsx'
+import ProbeSettings from './ProbeSettings.tsx'
 import PublicCook from './PublicCook.tsx'
 import CookSessions from './CookSessions.tsx'
 import EquipmentEditor from './EquipmentEditor.tsx'
@@ -101,6 +102,7 @@ function App() {
   }, [])
 
   const snapshot = state.status === 'ready' ? state.snapshot : undefined
+  const probeNames = snapshot ? Object.fromEntries(snapshot.probes.map((probe) => [probe.id, probe.name])) : undefined
   const source = snapshot?.source === 'simulator' ? 'Simulator'
     : snapshot?.device_id === 'direct-ble' ? 'Direct Bluetooth' : 'Bluetooth relay'
 
@@ -162,6 +164,10 @@ function App() {
             <p className="timestamp">
               Last sample <time dateTime={snapshot.observed_at}>{new Date(snapshot.observed_at).toLocaleTimeString()}</time>
             </p>
+            {access === 'owner' && snapshot.probes.length > 0 && (
+              <ProbeSettings probes={snapshot.probes} onSaved={(probes) => setState((current) =>
+                current.status === 'ready' ? { ...current, snapshot: { ...current.snapshot, probes } } : current)} />
+            )}
           </>
         )}
       </section>
@@ -172,9 +178,10 @@ function App() {
       )}
       {access === 'viewer' && <PublicCook snapshot={snapshot} unit={unit} />}
       {access === 'owner' && <>
-        <CookSessions unit={unit} profiles={profiles} liveHistory={history} snapshot={snapshot} probeIds={snapshot?.probes.map((probe) => probe.id) ?? []} />
+        <CookSessions unit={unit} profiles={profiles} liveHistory={history} snapshot={snapshot}
+          probeIds={snapshot?.probes.map((probe) => probe.id) ?? []} probeNames={probeNames} />
         {profileError && <p role="alert">{profileError}</p>}
-        <EquipmentEditor probeIds={snapshot?.probes.map((probe) => probe.id) ?? []} profiles={profiles}
+        <EquipmentEditor probeIds={snapshot?.probes.map((probe) => probe.id) ?? []} probeNames={probeNames} profiles={profiles}
           onSaved={(profile) => setProfiles((current) => [profile, ...current.filter((item) => item.id !== profile.id)])} />
       </>}
     </main>

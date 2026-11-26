@@ -8,8 +8,8 @@ import type { Layout, Profile } from './equipment.ts'
 
 export type PlacementEvent = { revision: number; recorded_at: string; layout: Profile }
 
-export default function CookPlacements({ sessionId, initial, probeIds, history, snapshot, unit }: {
-  sessionId: string; initial: Profile; probeIds: string[]; history: Snapshot[]; snapshot?: Snapshot; unit: Unit
+export default function CookPlacements({ sessionId, initial, probeIds, probeNames, history, snapshot, unit }: {
+  sessionId: string; initial: Profile; probeIds: string[]; probeNames?: Record<string, string>; history: Snapshot[]; snapshot?: Snapshot; unit: Unit
 }) {
   const [events, setEvents] = useState<PlacementEvent[]>()
   const [revision, setRevision] = useState(0)
@@ -56,7 +56,7 @@ export default function CookPlacements({ sessionId, initial, probeIds, history, 
   const selected = events.find((event) => event.revision === revision)
   return (
     <>
-      <EquipmentEditor probeIds={probeIds} cook={{ layout: last?.layout ?? initial, save }} />
+      <EquipmentEditor probeIds={probeIds} probeNames={probeNames} cook={{ layout: last?.layout ?? initial, save }} />
       <ChamberHeatMap layout={layout} snapshot={snapshot} playhead={Date.now()} layoutSince={layoutSince} unit={unit} />
       {imbalance && <section aria-label="Heat imbalance recommendation">
         <h3>Consider repositioning food</h3>

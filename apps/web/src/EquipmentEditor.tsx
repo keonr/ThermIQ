@@ -1,5 +1,6 @@
 import { useId, useState, type FormEvent, type PointerEvent } from 'react'
 import { equipmentRequest, type Food, type Layout, type Probe, type Profile } from './equipment.ts'
+import { probeLabel } from './telemetry.ts'
 import ChamberPlan from './ChamberPlan.tsx'
 
 type Selection = { kind: 'food' | 'probes'; index: number }
@@ -9,12 +10,12 @@ const blank: Layout = {
   food: [], probes: [],
 }
 
-type EditorProps = { probeIds: string[] } & (
+type EditorProps = { probeIds: string[]; probeNames?: Record<string, string> } & (
   | { profiles: Profile[]; onSaved: (profile: Profile) => void; cook?: undefined }
   | { cook: { layout: Layout; save: (layout: Layout) => Promise<Layout> }; profiles?: undefined; onSaved?: undefined }
 )
 
-export default function EquipmentEditor({ probeIds, profiles, onSaved, cook }: EditorProps) {
+export default function EquipmentEditor({ probeIds, probeNames, profiles, onSaved, cook }: EditorProps) {
   const titleId = useId()
   const [profileId, setProfileId] = useState('')
   const [draft, setDraft] = useState<Layout>(cook?.layout ?? blank)
@@ -121,7 +122,7 @@ export default function EquipmentEditor({ probeIds, profiles, onSaved, cook }: E
           ))}
         </fieldset>}
         <p>Select a placement, then tap the chamber to move it. Fine-tune the position with the controls below.</p>
-        <ChamberPlan layout={draft} selection={selection} onSelect={setSelection} onPosition={position} />
+        <ChamberPlan layout={draft} selection={selection} onSelect={setSelection} onPosition={position} probeNames={probeNames} />
         <div className="session-controls">
           <button type="button" disabled={busy || draft.food.length >= 32} onClick={() => {
             setSelection({ kind: 'food', index: draft.food.length })
@@ -134,12 +135,12 @@ export default function EquipmentEditor({ probeIds, profiles, onSaved, cook }: E
             update({ probes: [...draft.probes, { ...center, probe_id: event.target.value, insertion_mm: Math.max(draft.width_mm / 8, 1) }] })
           }}>
             <option value="">Select a live probe</option>
-            {availableProbes.map((id) => <option key={id} value={id}>{id}</option>)}
+            {availableProbes.map((id) => <option key={id} value={id}>{probeLabel(id, probeNames)}</option>)}
           </select></label>
         </div>
         {selected && selection && (
           <fieldset className="equipment-fields" disabled={busy}>
-            <legend>{'name' in selected ? 'Food placement' : selected.probe_id}</legend>
+            <legend>{'name' in selected ? 'Food placement' : probeLabel(selected.probe_id, probeNames)}</legend>
             {'name' in selected && <label>Food name <input value={selected.name} required maxLength={100}
               onChange={(event) => updatePlacement({ name: event.target.value })} /></label>}
             {([
