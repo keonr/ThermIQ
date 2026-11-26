@@ -66,3 +66,10 @@ dl .core { display: block; margin-bottom: 20px; }
 .report-table th, .report-table td { padding: 8px; text-align: left; border-bottom: 1px solid #455462; }
 .chamber-three { width: 100%; height: clamp(230px, 52vw, 420px); background: #121820; border: 1px solid #455462; border-radius: 10px; }
 .readonly-banner { border: 1px solid #526879; background: #192630; color: #e4eff6; padding: .75rem 1rem; border-radius: .65rem; }
+.probe-settings { margin-top: 12px; }
+.probe-order-list { list-style: none; padding: 0; margin: 16px 0; display: grid; gap: 10px; }
+.probe-order-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #374655; border-radius: 8px; background: #121820; }
+.probe-order-row label { display: grid; gap: 4px; flex: 1 1 220px; }
+.probe-order-row input { background: #1b2530; color: inherit; border: 1px solid #455462; border-radius: 6px; padding: 8px; font: inherit; }
+.probe-order-row .session-controls { margin-top: 0; }
+.probe-id { font-size: 0.85rem; color: #b1bfcd; font-family: ui-monospace, monospace; }

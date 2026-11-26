@@ -18,7 +18,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return body
 }
 
-export default function CookSessions({ unit, profiles, probeIds, liveHistory, snapshot }: { unit: Unit; profiles: Profile[]; probeIds: string[]; liveHistory: Snapshot[]; snapshot?: Snapshot }) {
+export default function CookSessions({ unit, profiles, probeIds, probeNames, liveHistory, snapshot }: {
+  unit: Unit; profiles: Profile[]; probeIds: string[]; probeNames?: Record<string, string>; liveHistory: Snapshot[]; snapshot?: Snapshot
+}) {
   const [sessions, setSessions] = useState<Session[]>([])
   const [name, setName] = useState('')
   const [equipmentId, setEquipmentId] = useState('')
@@ -118,7 +120,7 @@ export default function CookSessions({ unit, profiles, probeIds, liveHistory, sn
       )}
       {active && <CookInsights key={`insights-${active.id}`} history={activeHistory} snapshot={activeSnapshot} unit={unit} />}
       {active?.equipment && <CookPlacements key={`placements-${active.id}`} sessionId={active.id}
-        initial={active.equipment} probeIds={probeIds} history={activeHistory} snapshot={activeSnapshot} unit={unit} />}
+        initial={active.equipment} probeIds={probeIds} probeNames={probeNames} history={activeHistory} snapshot={activeSnapshot} unit={unit} />}
       {selected && !history && !error && <p role="status">Loading saved readings…</p>}
       {history && savedSession?.ended_at && (
         <>

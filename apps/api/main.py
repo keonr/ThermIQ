@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from cook_reports import cook_reports_router
 from direct_ble import DirectBluetoothProvider
 from equipment import EquipmentStore, equipment_router
+from probes import ProbeStore, probes_router
 from providers import ProviderUnavailable, SimulatedThermometerProvider
 from relay import RelaySample, RelayStore, SampleConflict
 from pydantic import ValidationError
@@ -34,14 +35,17 @@ def create_app(mode: str | None = None, *, scanner_factory=None) -> FastAPI:
 
     sessions = SessionStore(os.getenv("THERMIQ_SESSION_DB", "sessions.sqlite3"))
     equipment = EquipmentStore(sessions.path)
+    probes = ProbeStore(sessions.path)
     direct = DirectBluetoothProvider(scanner_factory) if mode == "ble_direct" else None
 
     async def latest_snapshot() -> TelemetrySnapshot:
         if simulator is not None:
-            return await simulator.latest_snapshot()
-        if direct is not None:
-            return await direct.latest_snapshot()
-        return await run_in_threadpool(store.latest_snapshot)
+            snapshot = await simulator.latest_snapshot()
+        elif direct is not None:
+            snapshot = await direct.latest_snapshot()
+        else:
+            snapshot = await run_in_threadpool(store.latest_snapshot)
+        return await run_in_threadpool(probes.apply, snapshot)
 
     async def capture():
         while True:
@@ -62,6 +66,7 @@ def create_app(mode: str | None = None, *, scanner_factory=None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         await run_in_threadpool(sessions.initialize)
         await run_in_threadpool(equipment.initialize)
+        await run_in_threadpool(probes.initialize)
         task = asyncio.create_task(capture())
         try:
             yield
@@ -76,6 +81,7 @@ def create_app(mode: str | None = None, *, scanner_factory=None) -> FastAPI:
 
     app = FastAPI(title="ThermIQ", lifespan=lifespan)
     app.include_router(equipment_router(equipment))
+    app.include_router(probes_router(probes))
     app.include_router(cook_reports_router(sessions.path))
     token = os.getenv("THERMIQ_RELAY_TOKEN", "").encode()
     store = None
