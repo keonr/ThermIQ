@@ -161,38 +161,58 @@ std::string makePayload(const ScanEvent& reading, const timeval& now) {
     return thermiq::relayPayload(reading.address, reading.packet, uuid, timestamp);
 }
 
-void upload() {
-    if (WiFi.status() != WL_CONNECTED || millis() - retryStarted < retryDelay) return;
-    timeval now{};
-    gettimeofday(&now, nullptr);
-    if (now.tv_sec < 1700000000) return;
-
-    if (!pendingSample) {
-        if (xQueueReceive(events, &sample, 0) != pdTRUE) return;
-        pending = makePayload(sample, now);
-        pendingSample = true;
-    }
-
-    static thermiq::BonjourTlsClient client;
-    client.setCACert(RELAY_CA_PEM);
-    client.setHandshakeTimeout(5);
-    HTTPClient http;
-    http.setConnectTimeout(4000);
-    http.setTimeout(4000);
+int sendOnce(HTTPClient& http, thermiq::BonjourTlsClient& client, const std::string& body) {
     int status = -1;
     if (http.begin(client, RELAY_URL)) {
         http.addHeader("Content-Type", "application/json");
         http.addHeader("Authorization", String("Bearer ") + RELAY_TOKEN);
-        status = http.POST(pending.c_str());
+        status = http.POST(body.c_str());
+        if (status > 0) http.getString();
         http.end();
     }
+    if (status <= 0) client.stop();
+    return status;
+}
 
+int postPayload(const std::string& body) {
+    static thermiq::BonjourTlsClient client;
+    static HTTPClient http;
+    static bool initialized = false;
+    if (!initialized) {
+        client.setCACert(RELAY_CA_PEM);
+        client.setHandshakeTimeout(5);
+        http.setReuse(true);
+        http.setConnectTimeout(4000);
+        http.setTimeout(4000);
+        initialized = true;
+    }
+
+    const bool reused = client.connected();
+    int status = sendOnce(http, client, body);
+    // Reconnect once immediately if the server closed an idle keep-alive socket.
+    if (status <= 0 && reused) status = sendOnce(http, client, body);
+    return status;
+}
+
+bool upload() {
+    if (WiFi.status() != WL_CONNECTED || millis() - retryStarted < retryDelay) return false;
+    timeval now{};
+    gettimeofday(&now, nullptr);
+    if (now.tv_sec < 1700000000) return false;
+
+    if (!pendingSample) {
+        if (xQueueReceive(events, &sample, 0) != pdTRUE) return false;
+        pending = makePayload(sample, now);
+        pendingSample = true;
+    }
+
+    const int status = postPayload(pending);
     if (thermiq::retryUpload(status)) {
         retryStarted = millis();
         retryDelay = retrySeconds * 1000;
         retrySeconds = std::min(retrySeconds * 2, 30u);
         Serial.printf("{\"status\":\"upload_retry\",\"http\":%d}\n", status);
-        return;
+        return false;
     }
     Serial.printf("{\"status\":\"%s\",\"http\":%d}\n",
                   status >= 200 && status < 300 ? "uploaded" : "sample_rejected", status);
@@ -200,6 +220,7 @@ void upload() {
     pendingSample = false;
     retrySeconds = 1;
     retryDelay = 0;
+    return true;
 }
 #endif
 
@@ -237,12 +258,13 @@ void setup() {
 
 void loop() {
 #ifdef THERMIQ_ENABLE_RELAY
+    bool uploaded = false;
     if (events) {
         const auto lost = dropped.exchange(0);
         if (lost) Serial.printf("{\"status\":\"queue_full\",\"dropped\":%u}\n", lost);
-        upload();
+        uploaded = upload();
     }
-    delay(50);
+    delay(uploaded && events && uxQueueMessagesWaiting(events) ? 1 : 50);
 #else
     ScanEvent event{};
     if (events && xQueueReceive(events, &event, pdMS_TO_TICKS(250))) printEvent(event);
