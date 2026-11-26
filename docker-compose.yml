@@ -1,0 +1,27 @@
+services:
+  api:
+    build: ./apps/api
+    environment:
+      THERMIQ_TELEMETRY_SOURCE: ${THERMIQ_TELEMETRY_SOURCE:-simulator}
+      THERMIQ_SIMULATOR_SCENARIO: ${THERMIQ_SIMULATOR_SCENARIO:-uniform}
+      THERMIQ_RELAY_TOKEN: ${THERMIQ_RELAY_TOKEN:-}
+      THERMIQ_RELAY_DB: /data/relay.sqlite3
+      THERMIQ_SESSION_DB: /data/sessions.sqlite3
+    volumes:
+      - relay-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/health', timeout=2).close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+  web:
+    build: ./apps/web
+    ports:
+      - "${THERMIQ_WEB_BIND:-127.0.0.1}:8080:8080"
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  relay-data:
