@@ -15,7 +15,7 @@ from cook_reports import cook_reports_router
 from direct_ble import DirectBluetoothProvider
 from equipment import EquipmentStore, equipment_router
 from providers import ProviderUnavailable, SimulatedThermometerProvider
-from relay import RelaySample, RelayStore, SampleConflict
+from relay import RelayHistory, RelaySample, RelayStore, SampleConflict
 from pydantic import ValidationError
 
 from sessions import (
@@ -148,6 +148,14 @@ def create_app(mode: str | None = None, *, scanner_factory=None) -> FastAPI:
             return await latest_snapshot()
         except ProviderUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.get("/api/v1/telemetry/history")
+    async def telemetry_history(
+        window_seconds: Annotated[int, Query(ge=60, le=86400)] = 600,
+    ) -> RelayHistory:
+        if store is None:
+            return RelayHistory(snapshots=[], bucket_seconds=2, window_seconds=window_seconds)
+        return await run_in_threadpool(store.history, window_seconds)
 
     @app.get("/api/v1/sessions")
     def list_sessions() -> list[CookSession]:

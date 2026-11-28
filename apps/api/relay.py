@@ -48,6 +48,12 @@ class RelaySample(BaseModel):
     values: RelayValues
 
 
+class RelayHistory(BaseModel):
+    snapshots: list[TelemetrySnapshot]
+    bucket_seconds: int
+    window_seconds: int
+
+
 class SampleConflict(Exception):
     """A retry changed an already stored sample."""
 
@@ -145,3 +151,51 @@ class RelayStore:
             source=source, device_id=device, probes=list(probes.values()),
             readings=readings, observed_at=max(reading.measured_at for reading in readings),
         )
+
+    def history(self, window_seconds: int, max_points: int = 450) -> RelayHistory:
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(seconds=window_seconds)
+        bucket_seconds = max(2, (window_seconds + max_points - 1) // max_points)
+        with closing(sqlite3.connect(self.path)) as db:
+            rows = db.execute("""
+                SELECT probe_id, channel, measured_at, received_at, value
+                FROM relay_values
+                WHERE simulated = ?
+                  AND channel IN ('food_temperature', 'ambient_temperature')
+                  AND value IS NOT NULL
+                  AND measured_at >= ?
+                ORDER BY measured_at ASC, received_at ASC, sample_id ASC
+            """, (self.simulated, cutoff.isoformat(timespec="microseconds"))).fetchall()
+
+        buckets: dict[int, dict[tuple[str, str], tuple[datetime, datetime, float]]] = {}
+        known_probes: dict[str, Probe] = {}
+        for probe_id, channel, measured, received, value in rows:
+            measured_at = datetime.fromisoformat(measured)
+            if measured_at < cutoff or measured_at > now:
+                continue
+            known_probes.setdefault(probe_id, Probe(id=probe_id, name=probe_id))
+            bucket_id = int(measured_at.timestamp() // bucket_seconds)
+            buckets.setdefault(bucket_id, {})[(probe_id, channel)] = (
+                measured_at, datetime.fromisoformat(received), float(value),
+            )
+
+        device = "simulated-relay" if self.simulated else "ble-relay"
+        source = "simulator" if self.simulated else "ble"
+        probe_list = sorted(known_probes.values(), key=lambda probe: probe.id)
+        snapshots: list[TelemetrySnapshot] = []
+        for bucket_id in sorted(buckets):
+            entries = buckets[bucket_id]
+            readings = []
+            for (probe_id, channel), (measured_at, received_at, value) in sorted(entries.items()):
+                kind, index = CHANNELS[channel]
+                readings.append(SensorReading(
+                    device_id=device, probe_id=probe_id, sensor_id=f"{probe_id}/{channel}",
+                    sensor_type=kind, sensor_index=index, temperature_c=value,
+                    battery_percent=None, measured_at=measured_at, received_at=received_at,
+                    source=source, quality="valid", simulated=self.simulated,
+                ))
+            snapshots.append(TelemetrySnapshot(
+                source=source, device_id=device, probes=probe_list, readings=readings,
+                observed_at=max(reading.measured_at for reading in readings),
+            ))
+        return RelayHistory(snapshots=snapshots, bucket_seconds=bucket_seconds, window_seconds=window_seconds)
