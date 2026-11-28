@@ -5,6 +5,7 @@ import {
 } from 'echarts/components'
 import { init, use, type EChartsType } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
+import { HISTORY_WINDOWS, sliceHistoryWindow, type HistoryWindowId } from './history.ts'
 import type { Snapshot, Unit } from './telemetry.ts'
 
 use([AriaComponent, GridComponent, LegendComponent, MarkLineComponent, LineChart, TooltipComponent, CanvasRenderer])
@@ -21,6 +22,8 @@ export default function TemperatureChart({ history, unit, saved = false, timelin
   const container = useRef<HTMLDivElement>(null)
   const chart = useRef<EChartsType>(null)
   const [channel, setChannel] = useState<Channel>('food_core')
+  const [windowId, setWindowId] = useState<HistoryWindowId>('10m')
+  const selectedWindow = HISTORY_WINDOWS.find((option) => option.id === windowId) ?? HISTORY_WINDOWS[1]
 
   useEffect(() => {
     const element = container.current
@@ -37,7 +40,10 @@ export default function TemperatureChart({ history, unit, saved = false, timelin
   }, [])
 
   useEffect(() => {
-    const latest = history.at(-1)
+    const { snapshots: visibleHistory, stride, recentCutoff } = saved
+      ? { snapshots: history, stride: 1, recentCutoff: 0 }
+      : sliceHistoryWindow(history, selectedWindow.ms)
+    const latest = visibleHistory.at(-1)
     const series: LineSeriesOption[] = (latest?.probes ?? []).map((probe, index) => ({
       name: probe.name,
       type: 'line',
@@ -52,17 +58,22 @@ export default function TemperatureChart({ history, unit, saved = false, timelin
           { xAxis: timeline.playhead, name: 'Replay position', lineStyle: { color: '#ffffff', type: 'solid' } },
         ],
       } : undefined,
-      showSymbol: history.length < 3,
-      data: history.flatMap((snapshot, index) => {
+      showSymbol: visibleHistory.length < 3,
+      data: visibleHistory.flatMap((snapshot, index) => {
         const timestamp = Date.parse(snapshot.observed_at)
         const reading = snapshot.readings.find((entry) => (
           entry.probe_id === probe.id && entry.sensor_type === channel && entry.quality === 'valid'
         ))
         const raw = reading?.temperature_c
         const value = raw == null ? null : Number((unit === 'F' ? raw * 9 / 5 + 32 : raw).toFixed(1))
-        const previous = history[index - 1]
-        if (previous && timestamp - Date.parse(previous.observed_at) > 6000) {
-          return [[timestamp - 1, null], [timestamp, value]]
+        const previous = visibleHistory[index - 1]
+        if (previous) {
+          const previousTs = Date.parse(previous.observed_at)
+          const cadence = !saved && previousTs < recentCutoff ? 30000 : 2000
+          const gapLimit = saved ? 6000 : Math.max(6000, cadence * stride * 3)
+          if (timestamp - previousTs > gapLimit) {
+            return [[timestamp - 1, null], [timestamp, value]]
+          }
         }
         return [[timestamp, value]]
       }),
@@ -83,22 +94,34 @@ export default function TemperatureChart({ history, unit, saved = false, timelin
       },
       series,
     }, { replaceMerge: ['series'] })
-  }, [channel, history, timeline, unit])
+  }, [channel, history, saved, selectedWindow.ms, timeline, unit])
 
   return (
     <section className="history" aria-labelledby={titleId}>
       <div className="history-header">
         <div>
           <h2 id={titleId}>{saved ? "Saved temperatures" : "Recent temperatures"}</h2>
-          <p>{saved ? "Saved cook history" : "Last 10 minutes in this tab"} · {history.at(-1)?.source === 'simulator' ? 'Simulated readings' : 'Probe readings'}</p>
+          <p>{saved ? "Saved cook history" : `Last ${selectedWindow.label} in this tab`} · {history.at(-1)?.source === 'simulator' ? 'Simulated readings' : 'Probe readings'}</p>
         </div>
-        <label>
-          Channel
-          <select value={channel} onChange={(event) => setChannel(event.target.value as Channel)}>
-            <option value="food_core">Food core</option>
-            <option value="ambient">Ambient</option>
-          </select>
-        </label>
+        <div className="session-controls">
+          {!saved && (
+            <label>
+              Window
+              <select value={windowId} onChange={(event) => setWindowId(event.target.value as HistoryWindowId)}>
+                {HISTORY_WINDOWS.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>
+            Channel
+            <select value={channel} onChange={(event) => setChannel(event.target.value as Channel)}>
+              <option value="food_core">Food core</option>
+              <option value="ambient">Ambient</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div ref={container} className="temperature-chart" />
     </section>
