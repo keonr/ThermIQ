@@ -5,7 +5,9 @@ import {
 } from 'echarts/components'
 import { init, use, type EChartsType } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { HISTORY_WINDOWS, sliceHistoryWindow, type HistoryWindowId } from './history.ts'
+import {
+  HISTORY_WINDOWS, formatHistorySpan, mergeHistoryWindow, type HistoryWindowId,
+} from './history.ts'
 import type { Snapshot, Unit } from './telemetry.ts'
 
 use([AriaComponent, GridComponent, LegendComponent, MarkLineComponent, LineChart, TooltipComponent, CanvasRenderer])
@@ -23,7 +25,55 @@ export default function TemperatureChart({ history, unit, saved = false, timelin
   const chart = useRef<EChartsType>(null)
   const [channel, setChannel] = useState<Channel>('food_core')
   const [windowId, setWindowId] = useState<HistoryWindowId>('10m')
+  const [serverHistory, setServerHistory] = useState<{ snapshots: Snapshot[]; bucketSeconds: number }>({
+    snapshots: [], bucketSeconds: 2,
+  })
   const selectedWindow = HISTORY_WINDOWS.find((option) => option.id === windowId) ?? HISTORY_WINDOWS[1]
+  const latestFeed = history.at(-1)
+  const feedKey = latestFeed ? `${latestFeed.source}:${latestFeed.device_id}` : ''
+
+  useEffect(() => {
+    if (saved) return
+    const controller = new AbortController()
+    const seconds = Math.round(selectedWindow.ms / 1000)
+    fetch(`/api/v1/telemetry/history?window_seconds=${seconds}`, {
+      cache: 'no-store', signal: controller.signal,
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then((body: { snapshots?: Snapshot[]; bucket_seconds?: number } | null) => {
+        if (!controller.signal.aborted && body && Array.isArray(body.snapshots)) {
+          setServerHistory({ snapshots: body.snapshots, bucketSeconds: body.bucket_seconds ?? 2 })
+        }
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [feedKey, saved, selectedWindow.ms])
+
+  const nowMs = Date.now()
+  const { snapshots: visibleHistory, stride, recentCutoff } = saved
+    ? { snapshots: history, stride: 1, recentCutoff: 0 }
+    : mergeHistoryWindow(serverHistory.snapshots, history, selectedWindow.ms, nowMs)
+
+  const validTimestamps = visibleHistory.flatMap((snapshot) => (
+    snapshot.readings.some((entry) => entry.sensor_type === channel && entry.quality === 'valid')
+      ? [Date.parse(snapshot.observed_at)]
+      : []
+  ))
+  const earliestValid = validTimestamps[0]
+  const anchorNow = Math.max(nowMs, validTimestamps.at(-1) ?? 0)
+  const sourceLabel = (visibleHistory.at(-1) ?? latestFeed)?.source === 'simulator' ? 'Simulated readings' : 'Probe readings'
+
+  let subtitle = `Saved cook history · ${sourceLabel}`
+  if (!saved) {
+    if (earliestValid === undefined) {
+      subtitle = `No valid readings in the last ${selectedWindow.label} · ${sourceLabel}`
+    } else {
+      const spanMs = Math.min(selectedWindow.ms, Math.max(0, anchorNow - earliestValid))
+      subtitle = spanMs < selectedWindow.ms * 0.9
+        ? `Showing last ${formatHistorySpan(spanMs)} (of ${selectedWindow.label} requested) · ${sourceLabel}`
+        : `Last ${selectedWindow.label} · ${sourceLabel}`
+    }
+  }
 
   useEffect(() => {
     const element = container.current
@@ -40,10 +90,7 @@ export default function TemperatureChart({ history, unit, saved = false, timelin
   }, [])
 
   useEffect(() => {
-    const { snapshots: visibleHistory, stride, recentCutoff } = saved
-      ? { snapshots: history, stride: 1, recentCutoff: 0 }
-      : sliceHistoryWindow(history, selectedWindow.ms)
-    const latest = visibleHistory.at(-1)
+    const latest = visibleHistory.at(-1) ?? latestFeed
     const series: LineSeriesOption[] = (latest?.probes ?? []).map((probe, index) => ({
       name: probe.name,
       type: 'line',
@@ -70,7 +117,8 @@ export default function TemperatureChart({ history, unit, saved = false, timelin
         if (previous) {
           const previousTs = Date.parse(previous.observed_at)
           const cadence = !saved && previousTs < recentCutoff ? 30000 : 2000
-          const gapLimit = saved ? 6000 : Math.max(6000, cadence * stride * 3)
+          const serverGap = !saved ? serverHistory.bucketSeconds * 1000 * 3 : 6000
+          const gapLimit = saved ? 6000 : Math.max(6000, serverGap, cadence * stride * 3)
           if (timestamp - previousTs > gapLimit) {
             return [[timestamp - 1, null], [timestamp, value]]
           }
@@ -94,14 +142,14 @@ export default function TemperatureChart({ history, unit, saved = false, timelin
       },
       series,
     }, { replaceMerge: ['series'] })
-  }, [channel, history, saved, selectedWindow.ms, timeline, unit])
+  }, [channel, latestFeed, recentCutoff, saved, serverHistory.bucketSeconds, stride, timeline, unit, visibleHistory])
 
   return (
     <section className="history" aria-labelledby={titleId}>
       <div className="history-header">
         <div>
           <h2 id={titleId}>{saved ? "Saved temperatures" : "Recent temperatures"}</h2>
-          <p>{saved ? "Saved cook history" : `Last ${selectedWindow.label} in this tab`} · {history.at(-1)?.source === 'simulator' ? 'Simulated readings' : 'Probe readings'}</p>
+          <p>{subtitle}</p>
         </div>
         <div className="session-controls">
           {!saved && (

@@ -54,20 +54,47 @@ export function recordSnapshot(history: Snapshot[], snapshot: Snapshot): Snapsho
   return retained
 }
 
-export function sliceHistoryWindow(history: Snapshot[], windowMs: number, maxPoints = 600): {
-  snapshots: Snapshot[]
-  stride: number
-  recentCutoff: number
-} {
-  const latest = history.at(-1)
-  if (!latest) return { snapshots: [], stride: 1, recentCutoff: 0 }
-  const latestTs = Date.parse(latest.observed_at)
-  const cutoff = latestTs - windowMs
-  const inWindow = history.filter((entry) => Date.parse(entry.observed_at) >= cutoff)
-  if (inWindow.length <= maxPoints) {
-    return { snapshots: inWindow, stride: 1, recentCutoff: latestTs - RECENT_FULL_MS }
+export function mergeHistoryWindow(
+  serverSnapshots: Snapshot[],
+  liveHistory: Snapshot[],
+  windowMs: number,
+  nowMs: number,
+  maxPoints = 600,
+): { snapshots: Snapshot[]; stride: number; recentCutoff: number } {
+  const reference = liveHistory.at(-1) ?? serverSnapshots.at(-1)
+  if (!reference) return { snapshots: [], stride: 1, recentCutoff: 0 }
+
+  const anchorMs = Math.max(nowMs, Date.parse(reference.observed_at))
+  const cutoff = anchorMs - windowMs
+  const byTime = new Map<number, Snapshot>()
+
+  for (const collection of [serverSnapshots, liveHistory]) {
+    for (const entry of collection) {
+      if (entry.device_id !== reference.device_id || entry.source !== reference.source) continue
+      const ts = Date.parse(entry.observed_at)
+      if (!Number.isFinite(ts) || ts < cutoff || ts > anchorMs + 5000) continue
+      byTime.set(ts, entry)
+    }
   }
-  const stride = Math.ceil(inWindow.length / maxPoints)
-  const sampled = inWindow.filter((_, index) => index % stride === 0 || index === inWindow.length - 1)
-  return { snapshots: sampled, stride, recentCutoff: latestTs - RECENT_FULL_MS }
+
+  const ordered = [...byTime.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, entry]) => entry)
+
+  if (ordered.length <= maxPoints) {
+    return { snapshots: ordered, stride: 1, recentCutoff: anchorMs - RECENT_FULL_MS }
+  }
+  const stride = Math.ceil(ordered.length / maxPoints)
+  const sampled = ordered.filter((_, index) => index % stride === 0 || index === ordered.length - 1)
+  return { snapshots: sampled, stride, recentCutoff: anchorMs - RECENT_FULL_MS }
+}
+
+export function formatHistorySpan(ms: number): string {
+  const seconds = Math.max(1, Math.round(ms / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const remainderMinutes = minutes % 60
+  return remainderMinutes === 0 ? `${hours}h` : `${hours}h ${remainderMinutes}m`
 }

@@ -93,3 +93,34 @@ class RelayTests(IsolatedAsyncioTestCase):
             snapshot = (await live.get("/api/v1/telemetry")).json()
         self.assertEqual(snapshot["source"], "ble")
         self.assertFalse(snapshot["readings"][0]["simulated"])
+
+    async def test_telemetry_history_filters_window_and_downsamples(self):
+        now = datetime.now(UTC)
+        old = (now - timedelta(minutes=25)).isoformat()
+        recent_one = (now - timedelta(minutes=8)).isoformat()
+        recent_two = (now - timedelta(minutes=2)).isoformat()
+        for measured_at, temp in ((old, 40.0), (recent_one, 55.0), (recent_two, 61.5)):
+            self.assertEqual((await self.post({
+                "sample_id": str(uuid4()), "probe_id": "probe-1", "measured_at": measured_at,
+                "simulated": True, "values": {"food_temperature": temp, "ambient_temperature": temp + 50},
+            })).status_code, 200)
+
+        # Only samples inside the requested 10-minute window appear; 25m-old sample is ignored.
+        ten_min = (await self.client.get("/api/v1/telemetry/history?window_seconds=600")).json()
+        self.assertEqual(len(ten_min["snapshots"]), 2)
+        temps = [
+            next(r["temperature_c"] for r in snap["readings"] if r["sensor_type"] == "food_core")
+            for snap in ten_min["snapshots"]
+        ]
+        self.assertEqual(temps, [55.0, 61.5])
+
+        # Widening to 1 hour includes the 25m-old sample; 5 minutes keeps only the 2m-old sample.
+        one_hour = (await self.client.get("/api/v1/telemetry/history?window_seconds=3600")).json()
+        self.assertEqual(len(one_hour["snapshots"]), 3)
+        five_min = (await self.client.get("/api/v1/telemetry/history?window_seconds=300")).json()
+        self.assertEqual(len(five_min["snapshots"]), 1)
+
+        # Live ble feed remains isolated from ble_simulator history.
+        async with self.client_for("ble") as live:
+            empty = (await live.get("/api/v1/telemetry/history?window_seconds=3600")).json()
+            self.assertEqual(empty["snapshots"], [])
